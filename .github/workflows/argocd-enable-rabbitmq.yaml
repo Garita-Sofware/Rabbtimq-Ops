@@ -24,6 +24,14 @@ permissions:
 jobs:
   enable:
     runs-on: ubuntu-latest
+    env:
+      # ⬅️ usa SIEMPRE la MISMA ruta para KUBECONFIG en todo el job
+      KUBECONFIG: ${{ runner.temp }}/kubeconfig
+      KUBECONFIG_TEXT: ${{ secrets.KUBE_CONFIG }}       # tu secreto con el kubeconfig en texto plano
+      GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}         # si repo privado
+      GIT_USERNAME: ${{ secrets.GIT_USERNAME }}         # si repo privado
+      GIT_TOKEN: ${{ secrets.GIT_TOKEN }}               # si repo privado
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -33,19 +41,13 @@ jobs:
       - name: Preparar carpeta enabled/
         run: |
           mkdir -p k8s/argocd/enabled
-          # Limpia todos los habilitadores previos de rabbitmq (opcional: comenta si deseas preservar otros)
           rm -f k8s/argocd/enabled/*.yaml
-
-          # Parsear CSV y validar
           IFS=',' read -ra PARTS <<< "${{ inputs.instances }}"
           declare -A SEEN
           for p in "${PARTS[@]}"; do
             p_trim=$(echo "$p" | xargs)
             if [[ "$p_trim" =~ ^[1-5]$ ]]; then
-              # evitar duplicados
-              if [[ -n "${SEEN[$p_trim]}" ]]; then
-                echo "Instancia duplicada $p_trim (omitida)"; continue
-              fi
+              [[ -n "${SEEN[$p_trim]}" ]] && { echo "Instancia duplicada $p_trim (omitida)"; continue; }
               SEEN[$p_trim]=1
               file="k8s/argocd/enabled/${{ inputs.environment }}-${p_trim}.yaml"
               echo "env: ${{ inputs.environment }}" > "$file"
@@ -55,6 +57,7 @@ jobs:
               echo "Instancia inválida: '$p_trim' (use 1..5)"; exit 1
             fi
           done
+          echo "Contenido enabled/:" && ls -la k8s/argocd/enabled
 
       - name: Commit & Push changes
         run: |
@@ -68,28 +71,56 @@ jobs:
             echo "No hay cambios para commitear."
           fi
 
-      - name: (Opcional) Aplicar AppProject y ApplicationSet
+      - name: Instalar kubectl
         if: ${{ inputs.apply_appset == 'true' }}
-        env:
-          KUBECONFIG_TEXT: ${{ secrets.KUBE_CONFIG }}
         run: |
-          # kubectl para aplicar los manifests de ArgoCD (solo necesario la primera vez o si cambian)
           sudo apt-get update -y && sudo apt-get install -y curl
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl
 
-          mkdir -p $HOME/.kube
-          printf "%s" "${KUBECONFIG_TEXT}" > $HOME/.kube/config
-          chmod 600 $HOME/.kube/config
+      - name: Configurar kubeconfig (texto plano)
+        if: ${{ inputs.apply_appset == 'true' }}
+        run: |
+          # Escribe el kubeconfig EXACTAMENTE en $KUBECONFIG, visible para todos los pasos
+          printf "%s" "${KUBECONFIG_TEXT}" > "${KUBECONFIG}"
+          chmod 600 "${KUBECONFIG}"
+          kubectl version --short || true
+          kubectl cluster-info || true
 
+      - name: (Privado) Crear/actualizar Repo Secret en ArgoCD
+        if: ${{ inputs.apply_appset == 'true' && env.GIT_REPO_URL != '' }}
+        run: |
+          cat <<EOF | kubectl apply -n argocd -f -
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            name: repo-rabbitmq-ops
+            namespace: argocd
+            labels:
+              argocd.argoproj.io/secret-type: repository
+          stringData:
+            url: ${GIT_REPO_URL}
+            username: ${GIT_USERNAME}
+            password: ${GIT_TOKEN}
+          EOF
+          kubectl get secret repo-rabbitmq-ops -n argocd -o yaml | sed -n '1,40p' || true
+
+      - name: Aplicar AppProject y ApplicationSet
+        if: ${{ inputs.apply_appset == 'true' }}
+        run: |
           kubectl apply -n argocd -f k8s/argocd/argocd-project-rabbitmq.yaml
           kubectl apply -n argocd -f k8s/argocd/argocd-appset-rabbitmq.yaml
 
       - name: Esperar reconciliación corta (opcional)
+        if: ${{ inputs.apply_appset == 'true' }}
         run: |
           echo "Esperando a que el ApplicationSet recoja los cambios..."
           sleep 10
-          # Listar las Applications (si ya existen)
-          kubectl get applications.argoproj.io -n argocd | grep rabbitmq || true
-        env:
-          KUBECONFIG_TEXT: ${{ secrets.KUBE_CONFIG }}
+          echo "Pods en argocd:"
+          kubectl get pods -n argocd
+          echo "Applications actuales:"
+          kubectl get applications.argoproj.io -n argocd || true
+          echo "Estado del ApplicationSet:"
+          kubectl get applicationset rabbitmq-appset -n argocd -o yaml | sed -n '/status:/,$p' || true
+          echo "Logs del controller (últimas 120 líneas):"
+          kubectl logs deploy/argocd-applicationset-controller -n argocd --tail=120 || true
