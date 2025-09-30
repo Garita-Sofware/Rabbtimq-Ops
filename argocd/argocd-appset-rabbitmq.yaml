@@ -9,7 +9,7 @@ spec:
         repoURL: https://github.com/Garita-Sofware/Rabbtimq-Ops.git
         revision: main
         files:
-          - path: k8s/argocd/enabled/*.yaml
+          - path: argocd/enabled/*.yaml
   template:
     metadata:
       name: rabbitmq-{{env}}-{{instance}}
