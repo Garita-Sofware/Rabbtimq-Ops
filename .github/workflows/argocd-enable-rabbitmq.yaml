@@ -43,8 +43,10 @@ jobs:
       - name: Preparar carpeta enabled/
         shell: bash
         run: |
+          set -euo pipefail
           mkdir -p k8s/argocd/enabled
           rm -f k8s/argocd/enabled/*.yaml
+
           IFS=',' read -ra PARTS <<< "${{ inputs.instances }}"
           declare -A SEEN
           for p in "${PARTS[@]}"; do
@@ -53,27 +55,37 @@ jobs:
               [[ -n "${SEEN[$p_trim]}" ]] && { echo "Instancia duplicada $p_trim (omitida)"; continue; }
               SEEN[$p_trim]=1
               file="k8s/argocd/enabled/${{ inputs.environment }}-${p_trim}.yaml"
-              echo "env: ${{ inputs.environment }}" > "$file"
-              echo "instance: \"$p_trim\"" >> "$file"
+              {
+                echo "env: ${{ inputs.environment }}"
+                echo "instance: \"$p_trim\""
+              } > "$file"
               echo "Creado $file"
             else
               echo "Instancia inválida: '$p_trim' (use 1..5)"; exit 1
             fi
           done
+
           echo "Contenido enabled/:"
           ls -la k8s/argocd/enabled
 
       - name: Commit & Push changes
+        shell: bash
         run: |
-          if [[ -n "$(git status --porcelain)" ]]; then
-            git config user.name "github-actions[bot]"
-            git config user.email "github-actions[bot]@users.noreply.github.com"
-            git add k8s/argocd/enabled/*.yaml
-            git commit -m "Enable RabbitMQ apps: env=${{ inputs.environment }}, instances=${{ inputs.instances }}"
-            git push
-          else
+          set -e
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Stagea adds/changes/deletes solo dentro de enabled/
+          git add -A k8s/argocd/enabled
+
+          # Si no hay nada staged, salir limpio
+          if git diff --cached --quiet; then
             echo "No hay cambios para commitear."
+            exit 0
           fi
+
+          git commit -m "Enable RabbitMQ apps: env=${{ inputs.environment }}, instances=${{ inputs.instances }}"
+          git push
 
       - name: Instalar kubectl
         if: ${{ inputs.apply_appset }}
@@ -112,8 +124,8 @@ jobs:
       - name: Aplicar AppProject y ApplicationSet
         if: ${{ inputs.apply_appset }}
         run: |
-          kubectl apply -n argocd -f argocd/argocd-project-rabbitmq.yaml
-          kubectl apply -n argocd -f argocd/argocd-appset-rabbitmq.yaml
+          kubectl apply -n argocd -f k8s/argocd/argocd-project-rabbitmq.yaml
+          kubectl apply -n argocd -f k8s/argocd/argocd-appset-rabbitmq.yaml
 
       - name: Esperar reconciliación corta (opcional)
         if: ${{ inputs.apply_appset }}
