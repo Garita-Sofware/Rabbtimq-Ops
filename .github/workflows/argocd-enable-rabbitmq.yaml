@@ -43,8 +43,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p k8s/argocd/enabled
-          rm -f k8s/argocd/enabled/*.yaml
+          mkdir -p argocd/enabled
+          rm -f argocd/enabled/*.yaml
 
           IFS=',' read -ra PARTS <<< "${{ inputs.instances }}"
           declare -A SEEN=()
