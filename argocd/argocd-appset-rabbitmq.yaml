@@ -13,16 +13,12 @@ spec:
   template:
     metadata:
       name: rabbitmq-{{env}}-{{instance}}
-      labels:
-        app.kubernetes.io/part-of: rabbitmq-ops
-        env: "{{env}}"
-        instance: "{{instance}}"
     spec:
       project: rabbitmq-ops
       source:
         repoURL: https://github.com/Garita-Sofware/Rabbtimq-Ops.git
         targetRevision: main
-        path: k8s/overlays/{{env}}/instances/{{instance}}
+        path: overlays/{{env}}/instances/{{instance}}
       destination:
         server: https://kubernetes.default.svc
         namespace: utils
