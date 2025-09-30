@@ -25,12 +25,11 @@ jobs:
   enable:
     runs-on: ubuntu-latest
     env:
-      # ⬅️ usa SIEMPRE la MISMA ruta para KUBECONFIG en todo el job
-      KUBECONFIG: ${{ runner.temp }}/kubeconfig
-      KUBECONFIG_TEXT: ${{ secrets.KUBE_CONFIG }}       # tu secreto con el kubeconfig en texto plano
-      GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}         # si repo privado
-      GIT_USERNAME: ${{ secrets.GIT_USERNAME }}         # si repo privado
-      GIT_TOKEN: ${{ secrets.GIT_TOKEN }}               # si repo privado
+      # kubeconfig se inyecta luego vía GITHUB_ENV; aquí solo otros envs
+      KUBECONFIG_TEXT: ${{ secrets.KUBE_CONFIG }}
+      GIT_REPO_URL: ${{ secrets.GIT_REPO_URL }}
+      GIT_USERNAME: ${{ secrets.GIT_USERNAME }}
+      GIT_TOKEN: ${{ secrets.GIT_TOKEN }}
 
     steps:
       - name: Checkout
@@ -38,7 +37,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Set KUBECONFIG path
+        run: echo "KUBECONFIG=$RUNNER_TEMP/kubeconfig" >> "$GITHUB_ENV"
+
       - name: Preparar carpeta enabled/
+        shell: bash
         run: |
           mkdir -p k8s/argocd/enabled
           rm -f k8s/argocd/enabled/*.yaml
@@ -57,7 +60,8 @@ jobs:
               echo "Instancia inválida: '$p_trim' (use 1..5)"; exit 1
             fi
           done
-          echo "Contenido enabled/:" && ls -la k8s/argocd/enabled
+          echo "Contenido enabled/:"
+          ls -la k8s/argocd/enabled
 
       - name: Commit & Push changes
         run: |
@@ -72,23 +76,23 @@ jobs:
           fi
 
       - name: Instalar kubectl
-        if: ${{ inputs.apply_appset == 'true' }}
+        if: ${{ inputs.apply_appset }}
         run: |
           sudo apt-get update -y && sudo apt-get install -y curl
           curl -LO "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
           chmod +x kubectl && sudo mv kubectl /usr/local/bin/kubectl
 
       - name: Configurar kubeconfig (texto plano)
-        if: ${{ inputs.apply_appset == 'true' }}
+        if: ${{ inputs.apply_appset }}
         run: |
-          # Escribe el kubeconfig EXACTAMENTE en $KUBECONFIG, visible para todos los pasos
+          # KUBECONFIG ya está definido en el entorno por el paso "Set KUBECONFIG path"
           printf "%s" "${KUBECONFIG_TEXT}" > "${KUBECONFIG}"
           chmod 600 "${KUBECONFIG}"
           kubectl version --short || true
           kubectl cluster-info || true
 
       - name: (Privado) Crear/actualizar Repo Secret en ArgoCD
-        if: ${{ inputs.apply_appset == 'true' && env.GIT_REPO_URL != '' }}
+        if: ${{ inputs.apply_appset && env.GIT_REPO_URL != '' }}
         run: |
           cat <<EOF | kubectl apply -n argocd -f -
           apiVersion: v1
@@ -106,13 +110,13 @@ jobs:
           kubectl get secret repo-rabbitmq-ops -n argocd -o yaml | sed -n '1,40p' || true
 
       - name: Aplicar AppProject y ApplicationSet
-        if: ${{ inputs.apply_appset == 'true' }}
+        if: ${{ inputs.apply_appset }}
         run: |
           kubectl apply -n argocd -f k8s/argocd/argocd-project-rabbitmq.yaml
           kubectl apply -n argocd -f k8s/argocd/argocd-appset-rabbitmq.yaml
 
       - name: Esperar reconciliación corta (opcional)
-        if: ${{ inputs.apply_appset == 'true' }}
+        if: ${{ inputs.apply_appset }}
         run: |
           echo "Esperando a que el ApplicationSet recoja los cambios..."
           sleep 10
