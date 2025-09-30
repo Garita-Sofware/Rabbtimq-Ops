@@ -89,13 +89,13 @@ jobs:
           git push
 
       - name: Instalar kubectl
-        if: ${{ inputs.apply_appset == 'true' }}
+        if: ${{ fromJSON(inputs.apply_appset) }}
         uses: azure/setup-kubectl@v4
         with:
-          version: 'v1.33.3'  # ajusta si quieres
+          version: 'v1.33.3'
 
       - name: Configurar kubeconfig (texto plano)
-        if: ${{ inputs.apply_appset == 'true' }}
+        if: ${{ fromJSON(inputs.apply_appset) }}
         run: |
           printf "%s" "${KUBECONFIG_TEXT}" > "${KUBECONFIG}"
           chmod 600 "${KUBECONFIG}"
@@ -103,7 +103,7 @@ jobs:
           kubectl cluster-info || true
 
       - name: (Privado) Crear/actualizar Repo Secret en ArgoCD
-        if: ${{ inputs.apply_appset == 'true' && env.GIT_REPO_URL != '' }}
+        if: ${{ fromJSON(inputs.apply_appset) && env.GIT_REPO_URL != '' }}
         run: |
           cat <<EOF | kubectl apply -n argocd -f -
           apiVersion: v1
@@ -121,18 +121,17 @@ jobs:
           kubectl get secret repo-rabbitmq-ops -n argocd -o yaml | sed -n '1,40p' || true
 
       - name: Aplicar AppProject y ApplicationSet
-        if: ${{ inputs.apply_appset == 'true' }}
+        if: ${{ fromJSON(inputs.apply_appset) }}
         run: |
-          # Asegúrate que estas rutas existen en tu repo:
           kubectl apply -n argocd -f argocd/argocd-project-rabbitmq.yaml
           kubectl apply -n argocd -f argocd/argocd-appset-rabbitmq.yaml
 
       - name: Esperar reconciliación corta (opcional)
-        if: ${{ inputs.apply_appset == 'true' }}
+        if: ${{ fromJSON(inputs.apply_appset) }}
         run: |
           echo "Esperando a que el ApplicationSet recoja los cambios..."
           sleep 12
-          echo "Pods en argocd:" && kubectl get pods -n argocd
-          echo "Applications actuales:" && kubectl get applications.argoproj.io -n argocd || true
-          echo "Estado del ApplicationSet:" && kubectl get applicationset rabbitmq-appset -n argocd -o yaml | sed -n '/status:/,$p' || true
-          echo "Logs del controller (últimas 120 líneas):" && kubectl logs deploy/argocd-applicationset-controller -n argocd --tail=120 || true
+          kubectl get pods -n argocd
+          kubectl get applications.argoproj.io -n argocd || true
+          kubectl get applicationset rabbitmq-appset -n argocd -o yaml | sed -n '/status:/,$p' || true
+          kubectl logs deploy/argocd-applicationset-controller -n argocd --tail=120 || true
