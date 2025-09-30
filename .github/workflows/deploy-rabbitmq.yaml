@@ -1,0 +1,167 @@
+name: Deploy RabbitMQ
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Ambiente a desplegar"
+        type: choice
+        required: true
+        options: [dev, uat, prod]
+      instances:
+        description: "Instancias (CSV), ej: 1,2,3 (máx 5)"
+        required: true
+        default: "1"
+      dry_run:
+        description: "Ejecutar como dry-run (no aplica cambios)?"
+        type: boolean
+        required: true
+        default: false
+      wait_rollout:
+        description: "Esperar el rollout de cada instancia?"
+        type: boolean
+        required: true
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-rabbitmq-${{ github.ref }}-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      KUSTOMIZE_VERSION: "5.4.2"
+      # Cambia el nombre del secreto si usas otro:
+      KUBECONFIG_TEXT: ${{ secrets.KUBE_CONFIG }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validar inputs
+        run: |
+          if [[ -z "${{ inputs.environment }}" ]]; then
+            echo "Falta 'environment'"; exit 1
+          fi
+          if [[ -z "${{ inputs.instances }}" ]]; then
+            echo "Falta 'instances'"; exit 1
+          fi
+
+      - name: Instalar jq (si no está)
+        run: |
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update -y
+            sudo apt-get install -y jq
+          fi
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
+
+      - name: Setup kustomize
+        uses: imranismail/setup-kustomize@v2
+        with:
+          kustomize-version: ${{ env.KUSTOMIZE_VERSION }}
+
+      - name: Configurar kubeconfig (texto plano desde secreto)
+        run: |
+          if [[ -z "${KUBECONFIG_TEXT}" ]]; then
+            echo "El secreto KUBECONFIG_TEXT no está configurado."; exit 1
+          fi
+          mkdir -p $HOME/.kube
+          # Guardamos el kubeconfig tal cual (texto plano)
+          printf "%s" "${KUBECONFIG_TEXT}" > $HOME/.kube/config
+          chmod 600 $HOME/.kube/config
+          echo "KUBECONFIG listo en $HOME/.kube/config"
+
+      - name: Mostrar versión de cluster (sanity check)
+        run: |
+          kubectl version --short
+          kubectl cluster-info
+
+      - name: Parsear y validar instancias (CSV -> JSON)
+        id: parse
+        run: |
+          IFS=',' read -ra PARTS <<< "${{ inputs.instances }}"
+          arr="["
+          sep=""
+          for p in "${PARTS[@]}"; do
+            p_trim=$(echo "$p" | xargs)
+            if [[ "$p_trim" =~ ^[1-5]$ ]]; then
+              # Evita duplicados
+              if echo "$arr" | grep -q "\"$p_trim\""; then
+                echo "Instancia duplicada: $p_trim (se omitirá)"
+                continue
+              fi
+              arr="${arr}${sep}\"${p_trim}\""
+              sep=","
+            else
+              echo "Instancia inválida: '$p_trim' (solo valores 1..5)."
+              exit 1
+            fi
+          done
+          arr="${arr}]"
+          if [[ "$arr" == "[]" ]]; then
+            echo "No hay instancias válidas para desplegar."; exit 1
+          fi
+          echo "instances_json=$arr" >> $GITHUB_OUTPUT
+          echo "Instancias validadas: $arr"
+
+      - name: Desplegar por instancia
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          WAIT_ROLLOUT: ${{ inputs.wait_rollout }}
+        run: |
+          set -euo pipefail
+
+          # Modo dry-run para kubectl (server-side)
+          if [[ "${DRY_RUN}" == "true" ]]; then
+            DRY="--dry-run=server"
+            echo "Ejecutando en modo DRY-RUN (no se aplicarán cambios)."
+          else
+            DRY=""
+          fi
+
+          # Recorremos instancias
+          echo '${{ steps.parse.outputs.instances_json }}' > /tmp/instances.json
+          for i in $(jq -r '.[]' /tmp/instances.json); do
+            path="k8s/overlays/${ENVIRONMENT}/instances/${i}"
+            echo "--------------------------------------------------"
+            echo "Aplicando overlay: ${path}"
+            # Mostrar previsualización de recursos renderizados (opcional)
+            echo "=== kustomize build ${path} (preview) ==="
+            kustomize build "${path}" | head -n 50 || true
+            echo "=== kubectl apply -k ${path} ${DRY} ==="
+            kubectl apply -k "${path}" ${DRY}
+
+            if [[ "${DRY_RUN}" == "true" ]]; then
+              echo "DRY-RUN activo: no se esperará rollout."
+              continue
+            fi
+
+            if [[ "${WAIT_ROLLOUT}" == "true" ]]; then
+              # El nombre del StatefulSet queda como 'rabbitmq-<env>-<n>'
+              sts="rabbitmq-${ENVIRONMENT}-${i}"
+              echo "Esperando rollout de StatefulSet/${sts} en namespace 'utils'..."
+              # Espera con timeout razonable (10m); ajusta según tu cluster
+              kubectl rollout status statefulset/${sts} -n utils --timeout=10m
+            else
+              echo "WAIT_ROLLOUT=false: no se esperará el rollout."
+            fi
+          done
+
+      - name: Resumen
+        if: always()
+        run: |
+          echo "---------------------------------------"
+          echo "Ambiente: ${{ inputs.environment }}"
+          echo "Instancias: ${{ inputs.instances }}"
+          echo "Dry-run: ${{ inputs.dry_run }}"
+          echo "Wait rollout: ${{ inputs.wait_rollout }}"
+          echo "Finalizado."

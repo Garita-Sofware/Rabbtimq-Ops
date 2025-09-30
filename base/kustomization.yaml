@@ -1,0 +1,13 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Nombre base "rabbitmq" al que luego se le concatena -<env>-<n>
+namePrefix: rabbitmq-
+
+resources:
+  - service.yaml
+  - statefulset.yaml
+  - configmap.yaml
+  - pvc.yaml
+  - secret.yaml
+  - namespace.yaml
