@@ -5,8 +5,8 @@ metadata:
   labels:
     app: rabbitmq
 spec:
-  serviceName: rabbitmq       # Se renombrará igual que el Service
-  replicas: 1                 # 1 por instancia; cada instancia es un StatefulSet separado
+  serviceName: rabbitmq
+  replicas: 1
   selector:
     matchLabels:
       app: rabbitmq
