@@ -1,3 +1,0 @@
-# Si tu cluster requiere una StorageClass específica, añade:
-# storageClassName: <tu-storageclass>
-# (O bórralo si la pones en el volumeClaimTemplates)
