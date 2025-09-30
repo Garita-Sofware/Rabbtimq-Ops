@@ -3,4 +3,4 @@ kind: Kustomization
 namespace: utils
 nameSuffix: "-dev-4"
 resources:
-  - ../../../base
+  - ../../../../base
