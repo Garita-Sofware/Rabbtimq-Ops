@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: rabbitmq-ops
+  namespace: argocd
+spec:
+  description: Proyecto RabbitMQ multiambiente/multiinstancia
+  sourceRepos:
+    - https://github.com/Garita-Sofware/Rabbtimq-Ops.git
+  destinations:
+    - namespace: utils
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: '*'
+      kind: '*'
+  namespaceResourceWhitelist:
+    - group: '*'
+      kind: '*'

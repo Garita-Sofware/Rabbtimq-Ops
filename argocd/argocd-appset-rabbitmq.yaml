@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: rabbitmq-appset
+  namespace: argocd
+spec:
+  generators:
+    - git:
+        repoURL: https://github.com/Garita-Sofware/Rabbtimq-Ops.git
+        revision: main
+        files:
+          - path: k8s/argocd/enabled/*.yaml
+  template:
+    metadata:
+      name: rabbitmq-{{env}}-{{instance}}
+      labels:
+        app.kubernetes.io/part-of: rabbitmq-ops
+        env: "{{env}}"
+        instance: "{{instance}}"
+    spec:
+      project: rabbitmq-ops
+      source:
+        repoURL: https://github.com/Garita-Sofware/Rabbtimq-Ops.git
+        targetRevision: main
+        path: k8s/overlays/{{env}}/instances/{{instance}}
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: utils
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true
+        syncOptions:
+          - CreateNamespace=true
